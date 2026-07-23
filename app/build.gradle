@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.example.insecurebrowser'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.example.insecurebrowser'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+}
+
+dependencies {
+    implementation 'org.mozilla.geckoview:geckoview:128.0.20240725162350'
+}
