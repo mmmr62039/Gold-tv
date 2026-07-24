@@ -4,6 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -23,6 +28,23 @@ public class MainActivity extends Activity {
     private GeckoSession session;
     private GeckoRuntime runtime;
     private static final String HOME_URL = "http://remote-pishgaman.runflare.com:32555/";
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private String currentUrl = HOME_URL;
+    private int retryDelayMs = 5000;
+    private boolean pageLoaded = false;
+
+    private final Runnable reconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!pageLoaded && hasRealInternet()) {
+                session.loadUri(currentUrl);
+                retryDelayMs = Math.min(retryDelayMs + 5000, 30000);
+            }
+            if (!pageLoaded) {
+                handler.postDelayed(this, retryDelayMs);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +75,31 @@ public class MainActivity extends Activity {
             public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession session, LoadRequest request) {
                 return GeckoResult.fromValue(AllowOrDeny.ALLOW);
             }
+
+            @Override
+            public void onLocationChange(GeckoSession session, String url, java.util.List<GeckoSession.PermissionDelegate.ContentPermission> perms, Boolean hasUserGesture) {
+                if (url != null) currentUrl = url;
+            }
+        });
+
+        session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
+            @Override
+            public void onPageStart(GeckoSession session, String url) {
+                pageLoaded = false;
+                if (url != null) currentUrl = url;
+            }
+
+            @Override
+            public void onPageStop(GeckoSession session, boolean success) {
+                pageLoaded = success;
+                if (success) {
+                    retryDelayMs = 5000;
+                    handler.removeCallbacks(reconnectRunnable);
+                    session.purgeHistory();
+                } else {
+                    startLowPowerReconnectLoop();
+                }
+            }
         });
 
         loadFromIntent(getIntent());
@@ -68,6 +115,8 @@ public class MainActivity extends Activity {
     private void loadFromIntent(Intent intent) {
         Uri data = intent != null ? intent.getData() : null;
         String url = data != null ? data.toString() : HOME_URL;
+        currentUrl = url;
+        pageLoaded = false;
         session.loadUri(url);
     }
 
@@ -89,6 +138,33 @@ public class MainActivity extends Activity {
                             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             );
         }
+    }
+
+    private void startLowPowerReconnectLoop() {
+        handler.removeCallbacks(reconnectRunnable);
+        if (hasRealInternet()) {
+            handler.postDelayed(reconnectRunnable, retryDelayMs);
+        } else {
+            handler.postDelayed(reconnectRunnable, 30000);
+        }
+    }
+
+    private boolean hasRealInternet() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+        Network network = cm.getActiveNetwork();
+        if (network == null) return false;
+        NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+        return caps != null
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+    }
+
+    @Override
+    protected void onDestroy() {
+        handler.removeCallbacks(reconnectRunnable);
+        if (session != null) session.close();
+        super.onDestroy();
     }
 
     @Override
